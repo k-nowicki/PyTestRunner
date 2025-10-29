@@ -22,10 +22,10 @@ test_assets/
 - [x] **Krok 1: Inicjalizacja projektu i obsługa argumentów CLI**
 - [x] **Krok 2: Ujednolicona obsługa błędów i kody wyjścia**
 - [x] **Krok 3: Przygotowanie tymczasowego kontekstu wykonania**
-- [ ] **Krok 4: Podstawowa integracja z Dockerem - uruchomienie testowego kontenera**
-- [ ] **Krok 5: Połączenie kontekstu i Dockera - montowanie wolumenu**
-- [ ] **Krok 6: Wykonanie pełnej sekwencji poleceń w kontenerze**
-- [ ] **Krok 7: Przechwytywanie pliku wynikowego**
+- [x] **Krok 4: Podstawowa integracja z Dockerem - uruchomienie testowego kontenera**
+- [x] **Krok 5: Połączenie kontekstu i Dockera - montowanie wolumenu**
+- [x] **Krok 6: Wykonanie pełnej sekwencji poleceń w kontenerze**
+- [x] **Krok 7: Przechwytywanie pliku wynikowego**
 - [ ] **Krok 8: Obsługa dodatkowych plików wejściowych**
 
 ---
@@ -83,7 +83,7 @@ test_assets/
 
 ---
 
-### [ ] Krok 4: Podstawowa integracja z Dockerem - uruchomienie testowego kontenera
+### [x] Krok 4: Podstawowa integracja z Dockerem - uruchomienie testowego kontenera
 
 **Zadanie:** Dodanie logiki do uruchomienia prostego kontenera.
 
@@ -100,7 +100,7 @@ test_assets/
 
 ---
 
-### [ ] Krok 5: Połączenie kontekstu i Dockera - montowanie wolumenu
+### [x] Krok 5: Połączenie kontekstu i Dockera - montowanie wolumenu
 
 **Zadanie:** Połączenie logiki z poprzednich kroków: montowanie tymczasowego kontekstu jako wolumen w kontenerze.
 
@@ -114,7 +114,7 @@ test_assets/
 
 ---
 
-### [ ] Krok 6: Wykonanie pełnej sekwencji poleceń w kontenerze
+### [x] Krok 6: Wykonanie pełnej sekwencji poleceń w kontenerze
 
 **Zadanie:** Zaimplementowanie głównej logiki: venv, instalacja zależności i uruchomienie skryptu.
 
@@ -130,7 +130,7 @@ test_assets/
 
 ---
 
-### [ ] Krok 7: Przechwytywanie pliku wynikowego
+### [x] Krok 7: Przechwytywanie pliku wynikowego
 
 **Zadanie:** Umożliwienie skryptowi docelowemu tworzenia pliku wynikowego i udostępnianie go na zewnątrz.
 
