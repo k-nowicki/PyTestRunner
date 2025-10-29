@@ -6,6 +6,178 @@ import shutil
 import docker
 import time
 import json
+from dataclasses import dataclass
+from typing import List, Optional
+
+@dataclass
+class ScriptConfig:
+    """Holds all script configuration."""
+    script_path: Path
+    reqs_path: Path
+    input_paths: List[Path]
+    script_args: str
+    json_output: bool
+
+# --- Custom Exceptions ---
+class RunnerError(Exception):
+    """Base exception for the runner."""
+    error_type = "runner_internal_error"
+    def __init__(self, message, details: Optional[dict] = None):
+        super().__init__(message)
+        self.message = message
+        self.details = details if details is not None else {}
+
+class EnvironmentSetupError(RunnerError):
+    """Raised when dependency installation fails."""
+    error_type = "environment_setup_failed"
+
+class ScriptExecutionError(RunnerError):
+    """Raised when the user script fails."""
+    error_type = "script_execution_failed"
+
+class DockerDaemonError(RunnerError):
+    """Raised for issues with the Docker daemon connection."""
+    error_type = "docker_daemon_error"
+
+class WorkspaceManager:
+    """Manages the temporary workspace and results directory."""
+    def __init__(self, config: ScriptConfig):
+        self.config = config
+        self.results_dir = Path.cwd() / "results"
+        self.temp_dir = None
+        self.temp_path = None
+        self.initial_files = set()
+
+    def __enter__(self):
+        """Sets up the workspace."""
+        # Prepare and clean the output directory
+        if self.results_dir.exists():
+            shutil.rmtree(self.results_dir)
+        self.results_dir.mkdir()
+
+        # Create a temporary directory and copy all necessary files
+        self.temp_dir = tempfile.mkdtemp()
+        self.temp_path = Path(self.temp_dir)
+        shutil.copy(self.config.script_path, self.temp_path)
+        shutil.copy(self.config.reqs_path, self.temp_path)
+        for input_file in self.config.input_paths:
+            shutil.copy(input_file, self.temp_path)
+
+        # Take a snapshot of the context before execution
+        self.initial_files = set(p.name for p in self.temp_path.iterdir())
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Cleans up the temporary directory."""
+        if not self.temp_dir:
+            return
+
+        timeout = 15
+        interval = 0.5
+        start_time = time.time()
+        while True:
+            try:
+                shutil.rmtree(self.temp_dir)
+                break
+            except OSError as e:
+                if time.time() - start_time > timeout:
+                    print(f"FATAL: Failed to clean up temp dir {self.temp_dir}. Error: {e}", file=sys.stderr)
+                    break
+                time.sleep(interval)
+    
+    def capture_outputs(self) -> List[str]:
+        """Compares snapshots to find new files and copies them to results_dir."""
+        final_files = set(p.name for p in self.temp_path.iterdir())
+        new_files = final_files - self.initial_files
+        captured_files = sorted(list(new_files))
+
+        for file_name in captured_files:
+            shutil.copy(self.temp_path / file_name, self.results_dir)
+        
+        return captured_files
+
+
+class DockerRunner:
+    """Manages the Docker container lifecycle."""
+    def __init__(self, config: ScriptConfig, workspace_path: Path, log_func):
+        self.config = config
+        self.workspace_path = workspace_path
+        self.log = log_func
+        try:
+            self.client = docker.from_env()
+        except docker.errors.DockerException as e:
+            raise DockerDaemonError(f"Failed to connect to Docker daemon: {e}") from e
+        self.image = "python:3.10-slim"
+
+    def run(self) -> str:
+        """
+        Runs the full container sequence: pull, create, start, wait, logs, remove.
+        Returns the container logs on success.
+        Raises a specific RunnerError on failure.
+        """
+        script_name = self.config.script_path.name
+        reqs_name = self.config.reqs_path.name
+        command_str = (
+            f"python -m venv /opt/venv && "
+            f"/opt/venv/bin/pip install -r /app/{reqs_name} && "
+            f"/opt/venv/bin/python /app/{script_name} {self.config.script_args}"
+        )
+        command = ["sh", "-c", command_str]
+
+        container = None
+        try:
+            self.log(f"Pulling image: {self.image}...")
+            self.client.images.pull(self.image)
+            
+            self.log(f"Creating container...")
+            container = self.client.containers.create(
+                self.image,
+                command,
+                volumes={str(self.workspace_path.resolve()): {'bind': '/app', 'mode': 'rw'}},
+                working_dir='/app'
+            )
+            
+            self.log(f"Starting container: {container.short_id}...")
+            container.start()
+            
+            result = container.wait()
+            exit_code = result['StatusCode']
+            self.log(f"Container finished with exit code: {exit_code}")
+
+            logs_bytes = container.logs(stdout=True, stderr=True)
+            container_logs = logs_bytes.decode('utf-8').strip()
+            self.log("Container logs captured.")
+
+            if exit_code != 0:
+                pip_error_signatures = [
+                    "Could not find a version that satisfies",
+                    "No matching distribution found",
+                    "Invalid requirement:",
+                    "is not a valid requirement."
+                ]
+                is_pip_error = any(sig in container_logs for sig in pip_error_signatures)
+                details = {"exit_code": exit_code, "raw_logs": container_logs}
+                
+                if is_pip_error:
+                    raise EnvironmentSetupError(
+                        "Failed to install dependencies from requirements.txt.",
+                        details=details
+                    )
+                else:
+                    raise ScriptExecutionError(
+                        "The user script failed with a non-zero exit code.",
+                        details=details
+                    )
+            
+            return container_logs
+        except docker.errors.DockerException as e:
+            # Broadly catch other Docker errors (e.g., image not found if pull fails)
+            raise DockerDaemonError(f"A Docker error occurred: {e}") from e
+        finally:
+            if container:
+                self.log(f"Removing container: {container.short_id}")
+                container.remove()
+
 
 def handle_exit(is_json_output, status, data):
     """
@@ -29,160 +201,102 @@ def handle_exit(is_json_output, status, data):
     sys.exit(exit_code)
 
 
-def main():
-    """
-    Creates a temporary context, mounts it as a volume in a Docker container,
-    and lists its contents.
-    """
+def parse_and_validate_args() -> ScriptConfig:
+    """Parses CLI arguments and performs initial validation."""
     parser = argparse.ArgumentParser(description="A simple Python script runner using Docker.")
     parser.add_argument("--script", required=True, help="Path to the Python script to execute.")
     parser.add_argument("--reqs", required=True, help="Path to the requirements.txt file.")
+    parser.add_argument("--inputs", nargs='+', help="Optional list of input files to be copied into the context.")
+    parser.add_argument("--script-args", type=str, default="", help="A string of arguments to pass to the script being executed.")
     parser.add_argument("--json-output", action='store_true', help="Enable JSON output for machine readability.")
 
     args = parser.parse_args()
 
-    # Centralized logging function for human-readable mode
-    log = lambda msg: print(msg, file=sys.stderr) if not args.json_output else None
-
     script_path = Path(args.script)
-    reqs_path = Path(args.reqs)
-
     if not script_path.is_file():
         handle_exit(args.json_output, 'error', {
             "status": "error",
             "error_type": "file_not_found",
             "message": f"Input script not found: {args.script}"
         })
+
+    reqs_path = Path(args.reqs)
     if not reqs_path.is_file():
         handle_exit(args.json_output, 'error', {
             "status": "error",
             "error_type": "file_not_found",
             "message": f"Requirements file not found: {args.reqs}"
         })
-    
-    container_logs = ""
-    temp_dir = tempfile.mkdtemp()
+
+    input_paths = []
+    if args.inputs:
+        for input_file in args.inputs:
+            input_path = Path(input_file)
+            if not input_path.is_file():
+                handle_exit(args.json_output, 'error', {
+                    "status": "error",
+                    "error_type": "file_not_found",
+                    "message": f"Input file not found: {input_file}"
+                })
+            input_paths.append(input_path)
+
+    return ScriptConfig(
+        script_path=script_path,
+        reqs_path=reqs_path,
+        input_paths=input_paths,
+        script_args=args.script_args,
+        json_output=args.json_output
+    )
+
+
+def main():
+    """
+    Creates a temporary context, mounts it as a volume in a Docker container,
+    and lists its contents.
+    """
+    config = parse_and_validate_args()
+
+    # Centralized logging function for human-readable mode
+    log = lambda msg: print(msg, file=sys.stderr) if not config.json_output else None
+
     try:
-        temp_path = Path(temp_dir)
-        shutil.copy(script_path, temp_path)
-        shutil.copy(reqs_path, temp_path)
-        log(f"Temporary context created and files copied to: {temp_path}")
+        with WorkspaceManager(config) as workspace:
+            log(f"Preparing clean output directory at: {workspace.results_dir}")
+            log(f"Temporary context created and files copied to: {workspace.temp_path}")
+            log(f"Initial context contains: {', '.join(workspace.initial_files) or 'no files'}")
 
-        client = docker.from_env()
-        image = "python:3.10-slim"
+            runner = DockerRunner(config, workspace.temp_path, log)
+            container_logs = runner.run()
+
+            captured_files = workspace.capture_outputs()
+            log(f"Found {len(captured_files)} new file(s) to capture: {', '.join(captured_files) or 'none'}")
+            log(f"All new files copied to: {workspace.results_dir}")
         
-        script_name = script_path.name
-        reqs_name = reqs_path.name
-        command_str = (
-            f"python -m venv /opt/venv && "
-            f"/opt/venv/bin/pip install -r /app/{reqs_name} && "
-            f"/opt/venv/bin/python /app/{script_name}"
-        )
-        command = ["sh", "-c", command_str]
-        
-        container = None
-        try:
-            log(f"Pulling image: {image}...")
-            client.images.pull(image)
-            
-            log(f"Creating container...")
-            container = client.containers.create(
-                image,
-                command,
-                volumes={str(temp_path.resolve()): {'bind': '/app', 'mode': 'rw'}},
-                working_dir='/app'
-            )
-            
-            log(f"Starting container: {container.short_id}...")
-            container.start()
-            
-            result = container.wait()
-            exit_code = result['StatusCode']
-            log(f"Container finished with exit code: {exit_code}")
-
-            logs_bytes = container.logs(stdout=True, stderr=True)
-            container_logs = logs_bytes.decode('utf-8').strip()
-            log("Container logs captured.")
-
-            if exit_code != 0:
-                raise docker.errors.ContainerError(
-                    f"Container exited with a non-zero status code: {exit_code}",
-                    exit_code, command, image, logs_bytes
-                )
-        finally:
-            if container:
-                log(f"Removing container: {container.short_id}")
-                container.remove()
-
-        output_file_name = "output.txt"
-        output_file_in_temp = temp_path / output_file_name
-        if not output_file_in_temp.is_file():
-             handle_exit(args.json_output, 'error', {
-                "status": "error",
-                "error_type": "output_file_missing",
-                "message": f"Output file '{output_file_name}' not found after execution.",
-                "details": {"raw_logs": container_logs}
-            })
-
-        shutil.copy(output_file_in_temp, Path.cwd())
-        log(f"Output file '{output_file_name}' captured and copied to current directory.")
-
-    except docker.errors.ContainerError as e:
-        # Heuristic to determine failure phase
-        is_pip_error = "Could not find a version that satisfies" in container_logs or \
-                       "No matching distribution found" in container_logs
-        
-        if is_pip_error:
-            handle_exit(args.json_output, 'error', {
-                "status": "error",
-                "error_type": "environment_setup_failed",
-                "message": "Failed to install dependencies from requirements.txt.",
-                "details": {"exit_code": e.exit_status, "raw_logs": container_logs}
-            })
-        else:
-            handle_exit(args.json_output, 'error', {
-                "status": "error",
-                "error_type": "script_execution_failed",
-                "message": "The user script failed with a non-zero exit code.",
-                "details": {"exit_code": e.exit_status, "raw_logs": container_logs}
-            })
-
-    except docker.errors.DockerException as e:
-        handle_exit(args.json_output, 'error', {
-            "status": "error",
-            "error_type": "docker_daemon_error",
-            "message": f"An error occurred with the Docker daemon: {e}",
+        handle_exit(config.json_output, 'success', {
+            "status": "success",
+            "message": f"Script executed successfully. Captured {len(captured_files)} output file(s).",
+            "captured_files": captured_files,
             "details": {"raw_logs": container_logs}
+        })
+
+    except RunnerError as e:
+        handle_exit(config.json_output, 'error', {
+            "status": "error",
+            "error_type": e.error_type,
+            "message": e.message,
+            "details": e.details
         })
     except Exception as e:
-        handle_exit(args.json_output, 'error', {
+        # Fallback for truly unexpected errors
+        internal_error = RunnerError(
+            f"An unexpected internal error occurred in the runner: {e}"
+        )
+        handle_exit(config.json_output, 'error', {
             "status": "error",
-            "error_type": "runner_internal_error",
-            "message": f"An unexpected internal error occurred in the runner: {e}",
-            "details": {"raw_logs": container_logs}
+            "error_type": internal_error.error_type,
+            "message": internal_error.message,
+            "details": {}
         })
-    finally:
-        log(f"Cleaning up temporary directory: {temp_dir}")
-        timeout = 15
-        interval = 0.5
-        start_time = time.time()
-        while True:
-            try:
-                shutil.rmtree(temp_dir)
-                log("Temporary directory cleaned up successfully.")
-                break
-            except OSError as e:
-                if time.time() - start_time > timeout:
-                    # This final error cannot use handle_exit as we are already in an exit path
-                    print(f"FATAL: Failed to clean up temp dir {temp_dir}. Error: {e}", file=sys.stderr)
-                    break
-                time.sleep(interval)
-    
-    handle_exit(args.json_output, 'success', {
-        "status": "success",
-        "message": "Script executed successfully and output file was captured.",
-        "details": {"raw_logs": container_logs}
-    })
 
 
 if __name__ == "__main__":

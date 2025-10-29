@@ -1,1 +1,5 @@
-test_assets/
+eval/*.*
+eval/assets/*
+results/
+Docs/*
+.venv
