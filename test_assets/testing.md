@@ -49,6 +49,20 @@ python py_test_runner.py --script test_assets/scripts/read_input.py --reqs test_
 *   The script exits with code `0`.
 *   The `./results/output.txt` file is created and its content is identical to `test_assets/inputs/data.csv`.
 
+### Test 1.4: Specifying a Custom Python Version
+
+This test verifies that the runner can pull and use a specific version of the Python Docker image.
+
+**Command:**
+```powershell
+python py_test_runner.py --script test_assets/scripts/version_checker.py --reqs test_assets/reqs/empty_reqs.txt --python-version "3.9"
+```
+
+**Expected Outcome:**
+*   The script exits with code `0`.
+*   The runner may take longer on the first run as it pulls the `python:3.9-slim` image.
+*   The `./results/output.txt` file is created and its content confirms that the script was executed by a `3.9.x` version of Python.
+
 ---
 
 ## 2. Error Handling Tests (JSON Output)

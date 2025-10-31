@@ -6,7 +6,7 @@ This tool is ideal for automated testing, data processing pipelines, and any sce
 
 ## Features
 
--   **Total Isolation:** Each script run occurs in a fresh Docker container based on `python:3.10-slim`.
+-   **Total Isolation:** Each script run occurs in a fresh Docker container based on a configurable Python version (defaults to `python:3.10-slim`).
 -   **Dependency Management:** Automatically creates a virtual environment and installs dependencies from a `requirements.txt` file.
 -   **File I/O:** Supports passing in arbitrary input files and automatically captures all files created during execution.
 -   **Argument Passing:** Allows for passing command-line arguments directly to the script being evaluated.
@@ -36,11 +36,10 @@ This tool is ideal for automated testing, data processing pipelines, and any sce
 
 The script is invoked via `python py_test_runner.py` with the following arguments:
 
-
-Usage: 
 ```
-py_test_runner.py [-h] --script SCRIPT --reqs REQS [--inputs INPUTS [INPUTS ...]] [--script-args SCRIPT_ARGS] [--json-output]
-
+usage: py_test_runner.py [-h] --script SCRIPT --reqs REQS [--inputs INPUTS [INPUTS ...]]
+                         [--script-args SCRIPT_ARGS]
+                         [--python-version PYTHON_VERSION] [--json-output]
 
 A simple Python script runner using Docker.
 
@@ -49,9 +48,14 @@ options:
   --script SCRIPT       Path to the Python script to execute. (Required)
   --reqs REQS           Path to the requirements.txt file. (Required)
   --inputs INPUTS [INPUTS ...]
-                        Optional list of input files to be copied into the context.
+                        Optional list of input files to be copied into the
+                        context.
   --script-args SCRIPT_ARGS
-                        A string of arguments to pass to the script being executed.
+                        A string of arguments to pass to the script being
+                        executed.
+  --python-version PYTHON_VERSION
+                        Specify the Python version for the Docker image (e.g.,
+                        '3.9', '3.11'). Defaults to '3.10'.
   --json-output         Enable JSON output for machine readability.
 ```
 
@@ -61,33 +65,33 @@ options:
 *   `--reqs`: **(Required)** The path to the `requirements.txt` file for the script. This can be an empty file if there are no dependencies. **Do not pass data files to this argument.**
 *   `--inputs`: **(Optional)** A space-separated list of paths to any data files, configuration files, or other assets that the script needs to access.
 *   `--script-args`: **(Optional)** A single string containing all the command-line arguments you want to pass to your script. Enclose the entire string in quotes.
+*   `--python-version`: **(Optional)** The Python version to use for the execution environment (e.g., "3.9", "3.11"). Defaults to "3.10".
 *   `--json-output`: **(Optional)** Switches the output mode from human-readable logs to a single, machine-readable JSON object printed to standard output.
 
 ### Examples
 
-**1. Basic Run (Human-Readable Output)**
+**1. Basic Run with Custom Python Version**
 
-This command runs a simple script with a data file and passes it an argument.
+This command runs a simple script in a Python 3.9 environment.
 
 ```powershell
 python py_test_runner.py `
     --script my_script.py `
     --reqs requirements.txt `
-    --inputs data.csv `
-    --script-args "--input-file data.csv --mode fast"
+    --python-version "3.9"
 ```
 *Output will be progress logs on `stderr` and the script's own output (from `print` statements) on `stdout`.*
 
-**2. Automated Run (JSON Output)**
+**2. Automated Run with Arguments**
 
-This is the same command, but optimized for automation. The script runs silently and prints a single JSON object at the end.
+This command runs a script that requires inputs and arguments, using the default Python version and optimized for automation.
 
 ```powershell
 python py_test_runner.py `
-    --script my_script.py `
-    --reqs requirements.txt `
-    --inputs data.csv `
-    --script-args "--input-file data.csv --mode fast" `
+    --script my_processing_script.py `
+    --reqs dependencies.txt `
+    --inputs config.json data.csv `
+    --script-args "--input-file data.csv --config config.json" `
     --json-output
 ```
 

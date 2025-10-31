@@ -17,6 +17,7 @@ class ScriptConfig:
     input_paths: List[Path]
     script_args: str
     json_output: bool
+    python_version: str
 
 # --- Custom Exceptions ---
 class RunnerError(Exception):
@@ -107,7 +108,7 @@ class DockerRunner:
             self.client = docker.from_env()
         except docker.errors.DockerException as e:
             raise DockerDaemonError(f"Failed to connect to Docker daemon: {e}") from e
-        self.image = "python:3.10-slim"
+        self.image = f"python:{self.config.python_version}-slim"
 
     def run(self) -> str:
         """
@@ -208,6 +209,7 @@ def parse_and_validate_args() -> ScriptConfig:
     parser.add_argument("--reqs", required=True, help="Path to the requirements.txt file.")
     parser.add_argument("--inputs", nargs='+', help="Optional list of input files to be copied into the context.")
     parser.add_argument("--script-args", type=str, default="", help="A string of arguments to pass to the script being executed.")
+    parser.add_argument("--python-version", type=str, default="3.10", help="Specify the Python version for the Docker image (e.g., '3.9', '3.11'). Defaults to '3.10'.")
     parser.add_argument("--json-output", action='store_true', help="Enable JSON output for machine readability.")
 
     args = parser.parse_args()
@@ -245,7 +247,8 @@ def parse_and_validate_args() -> ScriptConfig:
         reqs_path=reqs_path,
         input_paths=input_paths,
         script_args=args.script_args,
-        json_output=args.json_output
+        json_output=args.json_output,
+        python_version=args.python_version
     )
 
 
