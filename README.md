@@ -97,6 +97,13 @@ python py_test_runner.py `
 
 ## Outputs
 
+### Exit Codes
+
+The runner uses its exit code to signal its own health, not the health of the script it is running.
+
+*   **Exit Code `0` (Success):** The runner successfully completed all its tasks. This includes cases where the user's script failed or its dependencies could not be installed. Check the JSON output's `status` field to determine the outcome of the script evaluation.
+*   **Exit Code `1` (Runner Failure):** The runner itself failed due to an internal error, an invalid input (e.g., file not found), or a problem communicating with the Docker daemon.
+
 ### Standard Output
 
 *   **Human-Readable Mode:** In the default mode, the raw output (`stdout`) of the script being executed inside the container is piped to the runner's `stdout`.

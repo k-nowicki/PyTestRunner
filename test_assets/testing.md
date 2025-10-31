@@ -71,45 +71,48 @@ These tests are best run with the `--json-output` flag to verify the structured 
 
 ### Test 2.1: Failure - Environment Setup (`pip` install)
 
-This test ensures that a failure during the `pip install` phase is correctly identified.
+This test ensures that a failure during the `pip install` phase is correctly reported as a successful (but failed-script) run.
 
 **Command:**
 ```powershell
 python py_test_runner.py --script test_assets/scripts/simple_print.py --reqs test_assets/reqs/faulty_reqs.txt --json-output
+# Verify the exit code
+echo $LASTEXITCODE
 ```
 
 **Expected Outcome:**
-*   The script exits with code `1`.
-*   A single JSON object is printed to `stdout`.
-*   The JSON contains `"status": "error"` and `"error_type": "environment_setup_failed"`.
-*   The `details.raw_logs` field contains the error message from `pip`.
+*   The script exits with code **`0`**.
+*   A single JSON object is printed to `stdout` with `"status": "environment_setup_failed"`.
 
-### Test 2.2: Failure - Script Execution (Unhandled Exception)
+### Test 2.2: Failure - Script Execution (Successful Runner Operation)
 
-This test ensures that an error within the user's script is correctly identified and that the traceback is captured.
+This test ensures that an error within the user's script is correctly reported, but that the runner itself exits successfully.
 
 **Command:**
 ```powershell
 python py_test_runner.py --script test_assets/scripts/buggy_script.py --reqs test_assets/reqs/empty_reqs.txt --json-output
+# Verify the exit code
+echo $LASTEXITCODE
 ```
 
 **Expected Outcome:**
-*   The script exits with code `1`.
-*   A single JSON object is printed to `stdout`.
-*   The JSON contains `"status": "error"` and `"error_type": "script_execution_failed"`.
-*   The `details.raw_logs` field contains the full Python traceback for the `ZeroDivisionError`.
+*   The script exits with code **`0`**.
+*   A single JSON object is printed to `stdout` with `"status": "script_failed"` and `"error_type": "script_execution_failed"`.
+*   The `details.raw_logs` field contains the full Python traceback.
 
 ### Test 2.3: Failure - Input File Not Found
 
-This test verifies the runner's built-in file validation.
+This test verifies the runner's built-in file validation and that it's treated as a runner failure.
 
 **Command:**
 ```powershell
 python py_test_runner.py --script test_assets/scripts/simple_print.py --reqs non_existent_file.txt --json-output
+# Verify the exit code
+echo $LASTEXITCODE
 ```
 
 **Expected Outcome:**
-*   The script exits with code `1`.
+*   The script exits with code **`1`**.
 *   The JSON output contains `"status": "error"` and `"error_type": "file_not_found"`.
 *   The `message` field indicates which file was missing.
 

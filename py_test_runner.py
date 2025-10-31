@@ -10,6 +10,14 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 @dataclass
+class ScriptResult:
+    """Holds the results of a script execution."""
+    status: str
+    message: str
+    captured_files: Optional[List[str]] = None
+    details: Optional[dict] = None
+
+@dataclass
 class ScriptConfig:
     """Holds all script configuration."""
     script_path: Path
@@ -110,7 +118,7 @@ class DockerRunner:
             raise DockerDaemonError(f"Failed to connect to Docker daemon: {e}") from e
         self.image = f"python:{self.config.python_version}-slim"
 
-    def run(self) -> str:
+    def run(self) -> ScriptResult:
         """
         Runs the full container sequence: pull, create, start, wait, logs, remove.
         Returns the container logs on success.
@@ -160,17 +168,19 @@ class DockerRunner:
                 details = {"exit_code": exit_code, "raw_logs": container_logs}
                 
                 if is_pip_error:
-                    raise EnvironmentSetupError(
-                        "Failed to install dependencies from requirements.txt.",
+                    return ScriptResult(
+                        status="environment_setup_failed",
+                        message="Failed to install dependencies from requirements.txt.",
                         details=details
                     )
                 else:
-                    raise ScriptExecutionError(
-                        "The user script failed with a non-zero exit code.",
+                    return ScriptResult(
+                        status="script_failed",
+                        message="The user script failed with a non-zero exit code.",
                         details=details
                     )
             
-            return container_logs
+            return ScriptResult(status="success", message="Script executed successfully.", details={"raw_logs": container_logs})
         except docker.errors.DockerException as e:
             # Broadly catch other Docker errors (e.g., image not found if pull fails)
             raise DockerDaemonError(f"A Docker error occurred: {e}") from e
@@ -190,7 +200,8 @@ def handle_exit(is_json_output, status, data):
         print(json.dumps(data, indent=2))
     else:
         # For human-readable output, print messages to the appropriate streams.
-        log_stream = sys.stdout if status == 'success' else sys.stderr
+        is_failure_report = data.get("status") in ["script_failed", "environment_setup_failed"]
+        log_stream = sys.stderr if status == 'error' or is_failure_report else sys.stdout
         print(data.get("message", ""), file=log_stream)
         if "details" in data and "raw_logs" in data["details"]:
              # In case of container errors, show the raw logs for context.
@@ -269,17 +280,22 @@ def main():
             log(f"Initial context contains: {', '.join(workspace.initial_files) or 'no files'}")
 
             runner = DockerRunner(config, workspace.temp_path, log)
-            container_logs = runner.run()
+            result = runner.run()
 
             captured_files = workspace.capture_outputs()
             log(f"Found {len(captured_files)} new file(s) to capture: {', '.join(captured_files) or 'none'}")
             log(f"All new files copied to: {workspace.results_dir}")
         
+        # runner.run() now returns a result object. We augment it with captured files.
+        result.captured_files = captured_files
+        
+        # The runner itself succeeded, so the exit status is 'success'
+        # The JSON payload will describe the script's outcome.
         handle_exit(config.json_output, 'success', {
-            "status": "success",
-            "message": f"Script executed successfully. Captured {len(captured_files)} output file(s).",
-            "captured_files": captured_files,
-            "details": {"raw_logs": container_logs}
+            "status": result.status,
+            "message": result.message,
+            "captured_files": result.captured_files,
+            "details": result.details
         })
 
     except RunnerError as e:
